@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import {
   createEditorAdapter,
+  type ConfigurationChangeEventLike,
   type DiagnosticLike,
   type DisposableLike,
   type EditorDocument,
@@ -68,6 +69,10 @@ class FakeDiagnosticCollection extends FakeDisposable {
 
 class FakeVscode {
   public readonly collection = new FakeDiagnosticCollection();
+  public configMap = new Map<string, unknown>();
+  public workspaceName?: string;
+  public workspaceFolders?: readonly { uri: UriLike; name: string }[];
+
   public readonly listeners = {
     open: [] as Listener<EditorDocument>[],
     save: [] as Listener<EditorDocument>[],
@@ -77,6 +82,7 @@ class FakeVscode {
     rename: [] as Listener<{
       files: readonly { oldUri: UriLike; newUri: UriLike }[];
     }>[],
+    config: [] as Listener<ConfigurationChangeEventLike>[],
   };
 
   public readonly DiagnosticSeverity = {
@@ -118,7 +124,27 @@ class FakeVscode {
 
   public constructor(documents: readonly EditorDocument[] = []) {
     this.workspace = {
+      get name(): string | undefined {
+        return fakeSelf.workspaceName;
+      },
+      get workspaceFolders() {
+        return fakeSelf.workspaceFolders;
+      },
       textDocuments: documents,
+      getConfiguration: (section?: string) => ({
+        get: <T>(key: string, defaultValue?: T): T | undefined => {
+          const fullKey = section ? `${section}.${key}` : key;
+          if (fakeSelf.configMap.has(fullKey)) {
+            return fakeSelf.configMap.get(fullKey) as T;
+          }
+          if (fakeSelf.configMap.has(key)) {
+            return fakeSelf.configMap.get(key) as T;
+          }
+          return defaultValue;
+        },
+      }),
+      onDidChangeConfiguration: (listener) =>
+        this.listen(this.listeners.config, listener),
       onDidOpenTextDocument: (listener) => this.listen(this.listeners.open, listener),
       onDidSaveTextDocument: (listener) => this.listen(this.listeners.save, listener),
       onDidChangeTextDocument: (listener) =>
@@ -128,6 +154,8 @@ class FakeVscode {
       onDidDeleteFiles: (listener) => this.listen(this.listeners.delete, listener),
       onDidRenameFiles: (listener) => this.listen(this.listeners.rename, listener),
     };
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const fakeSelf = this;
   }
 
   public asApi(): VscodeLike {
@@ -157,6 +185,16 @@ class FakeVscode {
   public rename(oldUri: UriLike, newUri: UriLike): void {
     for (const listener of this.listeners.rename) {
       listener({ files: [{ oldUri, newUri }] });
+    }
+  }
+
+  public changeConfig(affectedKey = 'deucalionHpc'): void {
+    const event: ConfigurationChangeEventLike = {
+      affectsConfiguration: (section: string) =>
+        affectedKey === section || affectedKey.startsWith(`${section}.`),
+    };
+    for (const listener of this.listeners.config) {
+      listener(event);
     }
   }
 
@@ -385,6 +423,106 @@ test('a validator failure becomes a stable diagnostic instead of escaping the ev
   assert.equal(diagnostics?.length, 1);
   assert.equal(diagnostics?.[0]?.code, 'HPC_VALIDATION_FAILED');
   assert.equal(diagnostics?.[0]?.message, 'Validation failed unexpectedly. Save the document to retry.');
+
+  disposable.dispose();
+});
+
+test('plugin can be toggled off globally via deucalionHpc.enabled = false', () => {
+  const document = new FakeDocument('/workspace/Makefile', 'makefile', 'all:\n');
+  const fake = new FakeVscode([document]);
+  fake.configMap.set('enabled', false);
+
+  const disposable = createEditorAdapter(fake.asApi(), {
+    validateMakefile: () => [sampleDiagnostic],
+    validateSbatch: () => [],
+  });
+
+  assert.equal(fake.collection.entries.has(document.uri.toString()), false);
+  disposable.dispose();
+});
+
+test('plugin respects workspace filtering (disabledWorkspaces and enabledWorkspaces)', () => {
+  const docA = new FakeDocument('/workspaces/cluster-a/Makefile', 'makefile', 'all:\n');
+  const docB = new FakeDocument('/workspaces/cluster-b/Makefile', 'makefile', 'all:\n');
+  const fake = new FakeVscode([docA, docB]);
+  fake.configMap.set('disabledWorkspaces', ['cluster-a']);
+
+  const disposable = createEditorAdapter(fake.asApi(), {
+    validateMakefile: () => [sampleDiagnostic],
+    validateSbatch: () => [],
+  });
+
+  assert.equal(fake.collection.entries.has(docA.uri.toString()), false);
+  assert.equal(fake.collection.entries.has(docB.uri.toString()), true);
+
+  disposable.dispose();
+});
+
+test('makefile and slurm checks can be toggled independently', () => {
+  const makeDoc = new FakeDocument('/workspace/Makefile', 'makefile', 'all:\n');
+  const sbatchDoc = new FakeDocument('/workspace/job.sbatch', 'plaintext', '#SBATCH --nodes=1\n');
+  const fake = new FakeVscode([makeDoc, sbatchDoc]);
+  fake.configMap.set('makefile.enabled', false);
+  fake.configMap.set('slurm.enabled', true);
+
+  const disposable = createEditorAdapter(fake.asApi(), {
+    validateMakefile: () => [sampleDiagnostic],
+    validateSbatch: () => [{ ...sampleDiagnostic, code: 'SBATCH_NODES' }],
+  });
+
+  assert.equal(fake.collection.entries.has(makeDoc.uri.toString()), false);
+  assert.equal(fake.collection.entries.has(sbatchDoc.uri.toString()), true);
+
+  disposable.dispose();
+});
+
+test('specific rules can be disabled via disabledRules and per-rule overrides', () => {
+  const document = new FakeDocument('/workspace/Makefile', 'makefile', 'all:\n');
+  const fake = new FakeVscode([document]);
+  fake.configMap.set('disabledRules', ['MAKE_SAMPLE']);
+  fake.configMap.set('rules', { 'MAKE_ALLOWED': true, 'MAKE_DISABLED': false });
+
+  const disposable = createEditorAdapter(fake.asApi(), {
+    validateMakefile: () => [
+      { ...sampleDiagnostic, code: 'MAKE_SAMPLE' },
+      { ...sampleDiagnostic, code: 'MAKE_ALLOWED' },
+      { ...sampleDiagnostic, code: 'MAKE_DISABLED' },
+    ],
+    validateSbatch: () => [],
+  });
+
+  const diagnostics = fake.collection.entries.get(document.uri.toString());
+  assert.equal(diagnostics?.length, 1);
+  assert.deepEqual(
+    typeof diagnostics?.[0]?.code === 'string' ? diagnostics[0].code : diagnostics?.[0]?.code?.value,
+    'MAKE_ALLOWED',
+  );
+
+  disposable.dispose();
+});
+
+test('configuration changes dynamically revalidate open documents', () => {
+  const document = new FakeDocument('/workspace/Makefile', 'makefile', 'all:\n');
+  const fake = new FakeVscode([document]);
+  // Initially enabled
+  fake.configMap.set('enabled', true);
+
+  const disposable = createEditorAdapter(fake.asApi(), {
+    validateMakefile: () => [sampleDiagnostic],
+    validateSbatch: () => [],
+  });
+
+  assert.equal(fake.collection.entries.has(document.uri.toString()), true);
+
+  // Disable extension dynamically
+  fake.configMap.set('enabled', false);
+  fake.changeConfig('deucalionHpc.enabled');
+  assert.equal(fake.collection.entries.has(document.uri.toString()), false);
+
+  // Re-enable extension dynamically
+  fake.configMap.set('enabled', true);
+  fake.changeConfig('deucalionHpc.enabled');
+  assert.equal(fake.collection.entries.has(document.uri.toString()), true);
 
   disposable.dispose();
 });

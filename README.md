@@ -23,6 +23,36 @@ Processing is bounded:
 
 Version 0.1 performs no cross-file analysis and cannot fully verify values assembled dynamically by Make or shell code. Diagnostics are advisory and do not submit, cancel, or block work. The bundled core rule documentation records the cluster sources, retrieval dates, and any inaccessible or ambiguous constraints.
 
+## Configuration settings
+
+All settings are configured under the `deucalionHpc.*` namespace in VS Code User or Workspace settings (`.vscode/settings.json`):
+
+| Setting | Type | Default | Description |
+| --- | --- | --- | --- |
+| `deucalionHpc.enabled` | `boolean` | `true` | Master switch to enable or disable diagnostics globally or per workspace/folder. |
+| `deucalionHpc.disabledWorkspaces` | `string[]` | `[]` | List of workspace names or path patterns where validation is disabled. |
+| `deucalionHpc.enabledWorkspaces` | `string[]` | `[]` | When non-empty, only matching workspace names or paths are validated. |
+| `deucalionHpc.makefile.enabled` | `boolean` | `true` | Enable or disable GNU Makefile syntax and recipe checks. |
+| `deucalionHpc.slurm.enabled` | `boolean` | `true` | Enable or disable Slurm `sbatch` script checks. |
+| `deucalionHpc.disabledRules` | `string[]` | `[]` | List of rule codes to suppress (e.g. `["makefile.space-indented-recipe", "SBATCH_DYNAMIC_VALUE"]`). Supports wildcards such as `"makefile.*"`. |
+| `deucalionHpc.rules` | `object` | `{}` | Map of individual rule codes to their enabled boolean status (e.g. `{"SBATCH_DYNAMIC_VALUE": false}`). |
+
+### Example `.vscode/settings.json`
+
+```json
+{
+  "deucalionHpc.enabled": true,
+  "deucalionHpc.makefile.enabled": true,
+  "deucalionHpc.slurm.enabled": true,
+  "deucalionHpc.disabledRules": [
+    "SBATCH_DYNAMIC_VALUE"
+  ],
+  "deucalionHpc.rules": {
+    "makefile.space-indented-recipe": true
+  }
+}
+```
+
 ## Development
 
 Prerequisites for this pinned development toolchain are Node.js 22 or newer, npm, and VS Code 1.96 or newer. The extension runtime itself uses only the VS Code interface and has no npm runtime dependencies.
