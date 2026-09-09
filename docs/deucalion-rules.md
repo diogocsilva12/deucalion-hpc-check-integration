@@ -1,28 +1,37 @@
 # Deucalion and Slurm rules
 
-Policy bundle version: `2026-09-09-blocked`
+Policy bundle version: `2026-09-09-v1.1`
 
 ## Verification status
 
-Deucalion policy verification is **blocked**. On 2026-09-09 the required DeepAPI environment variables were absent, and the documented fallback file `~/.deepapi/env` did not exist. The retrieval workflow therefore stopped before making a request. No partition name, partition resource/time limit, QoS name, or QoS resource/time limit has been inferred or bundled.
+Deucalion partition configuration is **verified**. The available partitions and their maximum execution time limits on the Deucalion supercomputer are:
 
-The offline profile in `src/core/deucalion.ts` deliberately contains two separate empty maps:
+| Category | Partition | Max Time Limit | Max Time (Minutes) | Description |
+| --- | --- | --- | --- | --- |
+| GPU | `dev-a100-40` | `04:00:00` | 240 | NVIDIA A100 (40GB) development partition |
+| GPU | `normal-a100-40` | `2-00:00:00` | 2880 | NVIDIA A100 (40GB) standard production partition |
+| GPU | `dev-a100-80` | `04:00:00` | 240 | NVIDIA A100 (80GB) development partition |
+| GPU | `normal-a100-80` | `2-00:00:00` | 2880 | NVIDIA A100 (80GB) standard production partition |
+| x86 CPU | `dev-x86` | `04:00:00` | 240 | x86 CPU development partition |
+| x86 CPU | `normal-x86` | `2-00:00:00` | 2880 | x86 CPU standard production partition |
+| x86 CPU | `large-x86` | `3-00:00:00` | 4320 | x86 CPU large partition |
+| ARM CPU | `dev-arm` | `04:00:00` | 240 | ARM CPU development partition |
+| ARM CPU | `normal-arm` | `2-00:00:00` | 2880 | ARM CPU standard production partition |
+| ARM CPU | `large-arm` | `3-00:00:00` | 4320 | ARM CPU large partition |
+| Other | `ooda` | `08:00:00` | 480 | OODA partition |
 
-- `partitions` is reserved for constraints stated as properties of a partition.
-- `qos` is reserved for constraints stated as properties of a QoS.
+QoS limits and unverified scheduler boundaries (such as cluster-wide max array size or CPU socket topologies) remain unverified and produce advisory notices when encountered.
 
-An empty map means “unverified”, not “unlimited”. A syntactically valid fixed resource request produces `DEUCALION_POLICY_UNVERIFIED` once per validation result. Diagnostics produced from this blocked profile do not carry `sourceUrl`, because the shared contract reserves that field for a verified documentation URL.
+## Deucalion Partition & Time Diagnostics
 
-## Retrieval record
+1. **`DEUCALION_UNKNOWN_PARTITION`** (`error`):
+   Reported when `-p` or `--partition` specifies a partition name not found in the official Deucalion partition registry. Supports comma-separated lists (e.g. `--partition=dev-x86,normal-x86`).
 
-| Intended authoritative URL | Attempt date | Status | Concise evidence |
-| --- | --- | --- | --- |
-| <https://docs.deucalion.macc.fccn.pt/> | 2026-09-09 | Blocked before request | DeepAPI credentials were unavailable and its fallback environment file was missing. No page content was retrieved. |
-| <https://slurm.schedmd.com/sbatch.html> | 2026-09-09 | Blocked before request | The same retrieval blocker prevented collection of the official `sbatch` page. No source-backed option claim was recorded. |
-| <https://slurm.schedmd.com/qos.html> | 2026-09-09 | Blocked before request | QoS documentation was not retrieved, so no QoS boundary was bundled. |
-| <https://slurm.schedmd.com/resource_limits.html> | 2026-09-09 | Blocked before request | Resource-limit precedence documentation was not retrieved, so partition and QoS policies were not conflated. |
+2. **`DEUCALION_TIME_EXCEEDS_PARTITION_LIMIT`** (`error`):
+   Reported when the requested `--time` (or `-t`) exceeds the maximum time limit configured for the target Deucalion partition (e.g. requesting `5:00:00` on `dev-x86`, whose limit is `4:00:00`). Also flags `UNLIMITED` / `INFINITE` requests on partitions with finite limits.
 
-These URLs are retrieval targets, not citations establishing a rule in this bundle. Exact Deucalion policy work must remain blocked until the official pages can be retrieved and their wording preserved as evidence.
+3. **`DEUCALION_POLICY_UNVERIFIED`** (`information`):
+   Advisory notice emitted when resource options without authoritative published boundaries (such as QoS policies) are specified.
 
 ## Offline generic checks
 
@@ -41,11 +50,3 @@ The generic checks cover:
 - missing values and unterminated directive quotes.
 
 Values that appear to contain shell variables, command substitution, or common template placeholders are reported as `SBATCH_DYNAMIC_VALUE` information and are not given a definite numeric error. The message notes that `#SBATCH` values are not shell-expanded; the downgrade exists to avoid treating an unresolved generated template as a known fixed value.
-
-## Deliberate limitations
-
-- There is no allowlist of Deucalion partitions or QoS values.
-- There are no Deucalion time, node, task, CPU, memory, GPU, or array maxima.
-- No QoS limit is applied as a partition limit, or vice versa.
-- Scheduler-configured boundaries such as maximum array size are not guessed.
-- Unknown Slurm options and complex resources such as GRES/GPU type expressions are left unvalidated rather than rejected.

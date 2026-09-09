@@ -1,4 +1,9 @@
-import { DEUCALION_PROFILE } from './deucalion';
+import {
+  DEUCALION_PROFILE,
+  getDeucalionPartition,
+  isKnownDeucalionPartition,
+  parseSlurmTimeToMinutes,
+} from './deucalion';
 import type { HpcDiagnostic } from './types';
 
 interface Heredoc {
@@ -19,9 +24,24 @@ interface OptionOccurrence {
   valueEnd: number;
 }
 
+interface ParsedPartition {
+  name: string;
+  line: number;
+  option: OptionOccurrence;
+}
+
+interface ParsedTime {
+  raw: string;
+  minutes: number;
+  line: number;
+  option: OptionOccurrence;
+}
+
 interface ValidationState {
   memoryMode?: string;
   policyReported: boolean;
+  partitions: ParsedPartition[];
+  times: ParsedTime[];
 }
 
 const REQUIRED_VALUES = new Set([
@@ -296,6 +316,7 @@ function optionDiagnostic(
   lineNumber: number,
   code: string,
   message: string,
+  sourceUrl?: string,
 ): HpcDiagnostic {
   return {
     code,
@@ -305,6 +326,7 @@ function optionDiagnostic(
       start: { line: lineNumber, character: option.valueStart },
       end: { line: lineNumber, character: option.valueEnd },
     },
+    ...(sourceUrl ? { sourceUrl } : {}),
   };
 }
 
@@ -359,7 +381,26 @@ function validateDirective(line: string, lineNumber: number, state: ValidationSt
         state.memoryMode = option.name;
       }
     }
-    if (option.name === 'nodes') {
+    if (option.name === 'partition') {
+      const parts = option.value.split(',').map((p) => p.trim()).filter((p) => p.length > 0);
+      for (const part of parts) {
+        if (!isKnownDeucalionPartition(part)) {
+          diagnostics.push(optionDiagnostic(
+            option,
+            lineNumber,
+            'DEUCALION_UNKNOWN_PARTITION',
+            `Unknown Deucalion partition '${part}'. Available partitions: dev-a100-40, normal-a100-40, dev-a100-80, normal-a100-80, dev-x86, normal-x86, large-x86, dev-arm, normal-arm, large-arm, ooda.`,
+            'https://docs.deucalion.macc.fccn.pt/',
+          ));
+        } else {
+          state.partitions.push({
+            name: part,
+            line: lineNumber,
+            option,
+          });
+        }
+      }
+    } else if (option.name === 'nodes') {
       const match = option.value?.match(/^([1-9]\d*)(?:-([1-9]\d*))?$/);
       const lower = match?.[1];
       const upper = match?.[2];
@@ -395,13 +436,25 @@ function validateDirective(line: string, lineNumber: number, state: ValidationSt
         'SBATCH_INVALID_CPUS_PER_GPU',
         'CPU count per GPU must be a positive integer.',
       ));
-    } else if ((option.name === 'time' || option.name === 'time-min') && !validTime(option.value)) {
-      diagnostics.push(optionDiagnostic(
-        option,
-        lineNumber,
-        'SBATCH_INVALID_TIME',
-        'Time must use a Slurm time form such as minutes, HH:MM:SS, or days-hours:minutes:seconds.',
-      ));
+    } else if ((option.name === 'time' || option.name === 'time-min')) {
+      if (!validTime(option.value)) {
+        diagnostics.push(optionDiagnostic(
+          option,
+          lineNumber,
+          'SBATCH_INVALID_TIME',
+          'Time must use a Slurm time form such as minutes, HH:MM:SS, or days-hours:minutes:seconds.',
+        ));
+      } else if (option.name === 'time') {
+        const minutes = parseSlurmTimeToMinutes(option.value);
+        if (minutes !== undefined) {
+          state.times.push({
+            raw: option.value,
+            minutes,
+            line: lineNumber,
+            option,
+          });
+        }
+      }
     } else if (option.name.startsWith('mem') && !validMemory(option.value)) {
       diagnostics.push(optionDiagnostic(
         option,
@@ -421,12 +474,13 @@ function validateDirective(line: string, lineNumber: number, state: ValidationSt
     if (
       !optionHasError
       && CLUSTER_BOUND_OPTIONS.has(option.name)
-      && DEUCALION_PROFILE.verification === 'blocked'
+      && option.name !== 'partition'
+      && (DEUCALION_PROFILE.verification === 'blocked' || DEUCALION_PROFILE.verification === 'partial')
       && !state.policyReported
     ) {
       diagnostics.push({
         code: 'DEUCALION_POLICY_UNVERIFIED',
-        message: 'This resource syntax is valid, but Deucalion partition and QoS limits are unverified because the official policy source could not be retrieved; no cluster boundary is assumed.',
+        message: 'This resource syntax is valid, but certain Deucalion limits (such as QoS and node maxima) are unverified because the official policy source could not be fully retrieved; no cluster boundary is assumed.',
         severity: 'information',
         range: {
           start: { line: lineNumber, character: option.valueStart },
@@ -445,10 +499,13 @@ export function validateSbatch(text: string): HpcDiagnostic[] {
   const lines = text.split('\n').map((line) => line.endsWith('\r') ? line.slice(0, -1) : line);
   let headerEnded = false;
   const heredocs: Heredoc[] = [];
-  const validationState: ValidationState = { policyReported: false };
+  const validationState: ValidationState = {
+    policyReported: false,
+    partitions: [],
+    times: [],
+  };
 
   for (const [lineNumber, line] of lines.entries()) {
-
     if (heredocs.length > 0) {
       const current = heredocs[0];
       if (current === undefined) continue;
@@ -478,6 +535,27 @@ export function validateSbatch(text: string): HpcDiagnostic[] {
       ));
     }
     heredocs.push(...heredocsStartedBy(line));
+  }
+
+  // Cross-option validation: check requested time against partition limits
+  for (const part of validationState.partitions) {
+    const limit = getDeucalionPartition(part.name);
+    if (limit === undefined) continue;
+
+    for (const timeReq of validationState.times) {
+      if (timeReq.minutes > limit.maxTimeMinutes) {
+        diagnostics.push({
+          code: 'DEUCALION_TIME_EXCEEDS_PARTITION_LIMIT',
+          message: `Requested time '${timeReq.raw}' exceeds the maximum time limit of ${limit.maxTimeFormatted} for Deucalion partition '${limit.name}'.`,
+          severity: 'error',
+          range: {
+            start: { line: timeReq.line, character: timeReq.option.valueStart },
+            end: { line: timeReq.line, character: timeReq.option.valueEnd },
+          },
+          sourceUrl: 'https://docs.deucalion.macc.fccn.pt/',
+        });
+      }
+    }
   }
 
   return diagnostics;
