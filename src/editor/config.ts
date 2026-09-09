@@ -6,6 +6,7 @@ export interface DeucalionSettings {
   readonly slurmEnabled: boolean;
   readonly disabledRules: readonly string[];
   readonly rules: Record<string, boolean>;
+  readonly allowedPartitions: readonly string[];
 }
 
 export const DEFAULT_SETTINGS: DeucalionSettings = {
@@ -16,6 +17,7 @@ export const DEFAULT_SETTINGS: DeucalionSettings = {
   slurmEnabled: true,
   disabledRules: [],
   rules: {},
+  allowedPartitions: [],
 };
 
 export interface ConfigAccessorLike {
@@ -140,6 +142,9 @@ export function resolveSettings(
   const disabledRules = accessor.get<string[]>('disabledRules', []) ?? [];
   const rules = accessor.get<Record<string, boolean>>('rules', {}) ?? {};
 
+  const allowedPartitionsVal = accessor.get<string[]>('slurm.allowedPartitions');
+  const allowedPartitions = allowedPartitionsVal ?? (accessor.get<string[]>('allowedPartitions', []) ?? []);
+
   return {
     enabled,
     disabledWorkspaces,
@@ -148,5 +153,6 @@ export function resolveSettings(
     slurmEnabled,
     disabledRules,
     rules,
+    allowedPartitions,
   };
 }
