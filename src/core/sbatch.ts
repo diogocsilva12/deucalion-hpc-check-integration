@@ -78,7 +78,7 @@ function heredocsStartedBy(line: string): Heredoc[] {
   let quote: "'" | '"' | undefined;
 
   while (index < line.length) {
-    const character = line[index];
+    const character = line.charAt(index);
     if (quote !== undefined) {
       if (character === quote) quote = undefined;
       else if (character === '\\' && quote === '"') index += 1;
@@ -94,26 +94,26 @@ function heredocsStartedBy(line: string): Heredoc[] {
       index += 2;
       continue;
     }
-    if (character === '#' && (index === 0 || /[\s;|&()]/.test(line[index - 1]))) break;
-    if (character !== '<' || line[index + 1] !== '<' || line[index + 2] === '<') {
+    if (character === '#' && (index === 0 || /[\s;|&()]/.test(line.charAt(index - 1)))) break;
+    if (character !== '<' || line.charAt(index + 1) !== '<' || line.charAt(index + 2) === '<') {
       index += 1;
       continue;
     }
 
     index += 2;
-    const stripTabs = line[index] === '-';
+    const stripTabs = line.charAt(index) === '-';
     if (stripTabs) index += 1;
-    while (line[index] === ' ' || line[index] === '\t') index += 1;
+    while (line.charAt(index) === ' ' || line.charAt(index) === '\t') index += 1;
 
     let delimiter = '';
     let delimiterQuote: "'" | '"' | undefined;
     while (index < line.length) {
-      const delimiterCharacter = line[index];
+      const delimiterCharacter = line.charAt(index);
       if (delimiterQuote !== undefined) {
         if (delimiterCharacter === delimiterQuote) delimiterQuote = undefined;
         else if (delimiterCharacter === '\\' && delimiterQuote === '"' && index + 1 < line.length) {
           index += 1;
-          delimiter += line[index];
+          delimiter += line.charAt(index);
         } else delimiter += delimiterCharacter;
         index += 1;
       } else if (delimiterCharacter === "'" || delimiterCharacter === '"') {
@@ -121,7 +121,7 @@ function heredocsStartedBy(line: string): Heredoc[] {
         index += 1;
       } else if (delimiterCharacter === '\\' && index + 1 < line.length) {
         index += 1;
-        delimiter += line[index];
+        delimiter += line.charAt(index);
         index += 1;
       } else if (/[\s;|&<>]/.test(delimiterCharacter)) {
         break;
@@ -147,13 +147,13 @@ function tokenizeDirective(line: string, lineNumber: number): { tokens: Token[];
     let value = '';
     let quote: "'" | '"' | undefined;
     while (index < line.length) {
-      const character = line[index];
+      const character = line.charAt(index);
       if (quote !== undefined) {
         if (character === quote) {
           quote = undefined;
           index += 1;
         } else if (character === '\\' && quote === '"' && index + 1 < line.length) {
-          value += line[index + 1];
+          value += line.charAt(index + 1);
           index += 2;
         } else {
           value += character;
@@ -165,7 +165,7 @@ function tokenizeDirective(line: string, lineNumber: number): { tokens: Token[];
       } else if (/\s/.test(character)) {
         break;
       } else if (character === '\\' && index + 1 < line.length) {
-        value += line[index + 1];
+        value += line.charAt(index + 1);
         index += 2;
       } else {
         value += character;
@@ -196,6 +196,7 @@ function parseOptions(tokens: readonly Token[]): OptionOccurrence[] {
   const options: OptionOccurrence[] = [];
   for (let index = 0; index < tokens.length; index += 1) {
     const token = tokens[index];
+    if (token === undefined) continue;
     if (token.value.startsWith('--')) {
       const equals = token.value.indexOf('=');
       const name = token.value.slice(2, equals < 0 ? undefined : equals);
@@ -221,11 +222,11 @@ function parseOptions(tokens: readonly Token[]): OptionOccurrence[] {
     }
 
     if (token.value.startsWith('-') && token.value.length >= 2) {
-      const name = SHORT_OPTIONS[token.value[1]];
+      const name = SHORT_OPTIONS[token.value.charAt(1)];
       if (name === undefined) continue;
       const attached = token.value.slice(2).replace(/^=/, '');
       if (attached.length > 0) {
-        const rawOffset = token.value[2] === '=' ? 3 : 2;
+        const rawOffset = token.value.charAt(2) === '=' ? 3 : 2;
         options.push({ name, value: attached, valueStart: token.start + rawOffset, valueEnd: token.end });
       } else {
         const next = tokens[index + 1];
@@ -277,12 +278,16 @@ function validArray(value: string | undefined): boolean {
   const percentParts = value.split('%');
   if (percentParts.length > 2 || (percentParts[1] !== undefined && !positiveInteger(percentParts[1]))) return false;
 
-  const segments = percentParts[0].split(',');
+  const arraySpec = percentParts[0];
+  if (arraySpec === undefined) return false;
+  const segments = arraySpec.split(',');
   if (segments.length === 0 || segments.some((segment) => segment.length === 0)) return false;
   return segments.every((segment) => {
     if (/^\d+$/.test(segment)) return true;
     const match = segment.match(/^(\d+)-(\d+)(?::([1-9]\d*))?$/);
-    return match !== null && BigInt(match[2]) >= BigInt(match[1]);
+    const lower = match?.[1];
+    const upper = match?.[2];
+    return lower !== undefined && upper !== undefined && BigInt(upper) >= BigInt(lower);
   });
 }
 
@@ -356,7 +361,9 @@ function validateDirective(line: string, lineNumber: number, state: ValidationSt
     }
     if (option.name === 'nodes') {
       const match = option.value?.match(/^([1-9]\d*)(?:-([1-9]\d*))?$/);
-      const descending = match?.[2] !== undefined && BigInt(match[2]) < BigInt(match[1]);
+      const lower = match?.[1];
+      const upper = match?.[2];
+      const descending = lower !== undefined && upper !== undefined && BigInt(upper) < BigInt(lower);
       if (match === null || match === undefined || descending) {
         diagnostics.push(optionDiagnostic(
           option,
@@ -440,11 +447,11 @@ export function validateSbatch(text: string): HpcDiagnostic[] {
   const heredocs: Heredoc[] = [];
   const validationState: ValidationState = { policyReported: false };
 
-  for (let lineNumber = 0; lineNumber < lines.length; lineNumber += 1) {
-    const line = lines[lineNumber];
+  for (const [lineNumber, line] of lines.entries()) {
 
     if (heredocs.length > 0) {
       const current = heredocs[0];
+      if (current === undefined) continue;
       const candidate = current.stripTabs ? line.replace(/^\t+/, '') : line;
       if (candidate === current.delimiter) heredocs.shift();
       continue;
