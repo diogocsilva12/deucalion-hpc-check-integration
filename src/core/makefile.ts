@@ -123,7 +123,11 @@ export function validateMakefile(text: string): HpcDiagnostic[] {
 
     const conditionalMatch = /^(ifeq|ifneq|ifdef|ifndef)(?=\s|\(|$)/.exec(trimmed);
     if (conditionalMatch !== null) {
-      const at = keywordMark(firstPhysicalText, startLine, conditionalMatch[1]);
+      const keyword = conditionalMatch[1];
+      if (keyword === undefined) {
+        return;
+      }
+      const at = keywordMark(firstPhysicalText, startLine, keyword);
       conditionalStack.push({
         ...at,
         base: ruleState,
@@ -281,8 +285,7 @@ export function validateMakefile(text: string): HpcDiagnostic[] {
     ruleState = unionStates(ruleState, NO_RULE);
   };
 
-  for (let lineNumber = 0; lineNumber < physicalLines.length; lineNumber += 1) {
-    const physical = physicalLines[lineNumber];
+  for (const [lineNumber, physical] of physicalLines.entries()) {
 
     if (recipeContinuation) {
       recipeContinuation = hasTrailingContinuation(physical);
@@ -504,7 +507,7 @@ function scanSyntax(text: string): SyntaxScan {
       break;
     }
   }
-  return { ruleColon };
+  return ruleColon === undefined ? {} : { ruleColon };
 }
 
 function findRuleColon(text: string): number | undefined {
