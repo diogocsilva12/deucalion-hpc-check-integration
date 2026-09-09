@@ -1,4 +1,11 @@
 import type { HpcDiagnostic } from '../core/types';
+import {
+  isRuleEnabled,
+  isWorkspaceAllowed,
+  resolveSettings,
+  type ConfigAccessorLike,
+  type DeucalionSettings,
+} from './config';
 
 export interface DisposableLike {
   dispose(): void;
@@ -29,11 +36,33 @@ export interface DiagnosticCollectionLike extends DisposableLike {
   delete(uri: UriLike): void;
 }
 
+export interface WorkspaceConfigurationLike extends ConfigAccessorLike {
+  get<T>(section: string, defaultValue?: T): T | undefined;
+}
+
+export interface WorkspaceFolderLike {
+  readonly uri: UriLike;
+  readonly name: string;
+}
+
+export interface ConfigurationChangeEventLike {
+  affectsConfiguration(section: string, scope?: UriLike): boolean;
+}
+
 type Listener<T> = (event: T) => unknown;
 
 export interface VscodeLike {
   readonly workspace: {
+    readonly name?: string | undefined;
+    readonly workspaceFolders?: readonly WorkspaceFolderLike[] | undefined;
     readonly textDocuments: readonly EditorDocument[];
+    getConfiguration?(
+      section?: string | undefined,
+      scope?: UriLike | undefined,
+    ): WorkspaceConfigurationLike;
+    onDidChangeConfiguration?(
+      listener: Listener<ConfigurationChangeEventLike>,
+    ): DisposableLike;
     onDidOpenTextDocument(listener: Listener<EditorDocument>): DisposableLike;
     onDidSaveTextDocument(listener: Listener<EditorDocument>): DisposableLike;
     onDidChangeTextDocument(
@@ -152,11 +181,44 @@ export function createEditorAdapter(
     limits.maxDocumentCharacters ?? DEFAULT_MAX_DOCUMENT_CHARACTERS;
   const maxDiagnostics = limits.maxDiagnostics ?? DEFAULT_MAX_DIAGNOSTICS;
 
+  const getDocumentSettings = (document: EditorDocument): DeucalionSettings => {
+    const accessor = api.workspace.getConfiguration?.('deucalionHpc', document.uri);
+    return resolveSettings(accessor);
+  };
+
+  const isDocumentAllowed = (
+    document: EditorDocument,
+    settings: DeucalionSettings,
+  ): boolean => {
+    const workspaceName = api.workspace.name;
+    const folderPaths = (api.workspace.workspaceFolders ?? []).map(
+      (folder) => folder.uri.path,
+    );
+    const paths = [...folderPaths, document.fileName, document.uri.path];
+    return isWorkspaceAllowed(workspaceName, paths, settings);
+  };
+
   const validateDocument = (document: EditorDocument): void => {
     const text = document.getText();
     const makefile = isMakefile(document);
     const sbatch = isSbatchFile(document) || isShellWithSbatch(document, text);
     if (!makefile && !sbatch) {
+      collection.delete(document.uri);
+      return;
+    }
+
+    const settings = getDocumentSettings(document);
+    if (!isDocumentAllowed(document, settings)) {
+      collection.delete(document.uri);
+      return;
+    }
+
+    if (makefile && !settings.makefileEnabled) {
+      collection.delete(document.uri);
+      return;
+    }
+
+    if (sbatch && !settings.slurmEnabled) {
       collection.delete(document.uri);
       return;
     }
@@ -194,6 +256,8 @@ export function createEditorAdapter(
       return;
     }
 
+    items = items.filter((item) => isRuleEnabled(item.code, settings));
+
     if (items.length > maxDiagnostics) {
       items = [
         ...items.slice(0, Math.max(0, maxDiagnostics - 1)),
@@ -216,7 +280,7 @@ export function createEditorAdapter(
     }
   };
 
-  const disposables = [
+  const disposables: DisposableLike[] = [
     api.workspace.onDidOpenTextDocument(validateDocument),
     api.workspace.onDidSaveTextDocument(validateDocument),
     api.workspace.onDidChangeTextDocument(({ document }) => {
@@ -235,6 +299,18 @@ export function createEditorAdapter(
       }
     }),
   ];
+
+  if (api.workspace.onDidChangeConfiguration) {
+    disposables.push(
+      api.workspace.onDidChangeConfiguration((event) => {
+        if (event.affectsConfiguration('deucalionHpc')) {
+          for (const document of api.workspace.textDocuments) {
+            validateDocument(document);
+          }
+        }
+      }),
+    );
+  }
 
   for (const document of api.workspace.textDocuments) {
     validateDocument(document);
