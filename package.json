@@ -36,6 +36,67 @@
       "supported": true
     }
   },
+  "contributes": {
+    "configuration": {
+      "title": "Deucalion HPC",
+      "properties": {
+        "deucalionHpc.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Enable or disable Deucalion HPC diagnostics across the editor or for the current workspace/folder."
+        },
+        "deucalionHpc.disabledWorkspaces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "window",
+          "description": "List of workspace names or directory paths where Deucalion HPC validation is disabled."
+        },
+        "deucalionHpc.enabledWorkspaces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "window",
+          "description": "When non-empty, Deucalion HPC validation is enabled only for matching workspace names or directory paths."
+        },
+        "deucalionHpc.makefile.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Enable or disable GNU Makefile syntax and recipe indentation checks."
+        },
+        "deucalionHpc.slurm.enabled": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "description": "Enable or disable Slurm sbatch script checks."
+        },
+        "deucalionHpc.disabledRules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "resource",
+          "description": "List of rule codes to disable (e.g. ['makefile.space-indented-recipe', 'SBATCH_DYNAMIC_VALUE']). Prefix wildcards such as 'makefile.*' are supported."
+        },
+        "deucalionHpc.rules": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "boolean"
+          },
+          "default": {},
+          "scope": "resource",
+          "description": "Map of individual rule codes to their enabled state (e.g. {\"SBATCH_DYNAMIC_VALUE\": false})."
+        }
+      }
+    }
+  },
   "scripts": {
     "vscode:prepublish": "npm run build",
     "build": "tsc -p tsconfig.json",
