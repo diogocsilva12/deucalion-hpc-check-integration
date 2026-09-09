@@ -2,7 +2,7 @@
   "name": "deucalion-hpc-check",
   "displayName": "Deucalion HPC Check",
   "description": "Offline diagnostics for Deucalion GNU Make and Slurm files.",
-  "version": "0.1.0",
+  "version": "1.1.0",
   "publisher": "deucalion-hpc",
   "license": "UNLICENSED",
   "engines": {
