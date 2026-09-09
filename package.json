@@ -15,7 +15,8 @@
   "activationEvents": [
     "onLanguage:makefile",
     "onLanguage:shellscript",
-    "onStartupFinished"
+    "onStartupFinished",
+    "onView:deucalionHpcFindings"
   ],
   "categories": [
     "Linters"
@@ -37,6 +38,51 @@
     }
   },
   "contributes": {
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "deucalionHpcFindingsContainer",
+          "title": "Deucalion HPC Findings",
+          "icon": "resources/deucalion.svg"
+        }
+      ]
+    },
+    "views": {
+      "deucalionHpcFindingsContainer": [
+        {
+          "id": "deucalionHpcFindings",
+          "name": "Findings"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "deucalionHpc.refreshFindings",
+        "title": "Refresh Findings",
+        "category": "Deucalion HPC",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "deucalionHpc.clearFindings",
+        "title": "Clear Findings",
+        "category": "Deucalion HPC",
+        "icon": "$(clear-all)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "deucalionHpc.refreshFindings",
+          "when": "view == deucalionHpcFindings",
+          "group": "navigation"
+        },
+        {
+          "command": "deucalionHpc.clearFindings",
+          "when": "view == deucalionHpcFindings",
+          "group": "navigation"
+        }
+      ]
+    },
     "configuration": {
       "title": "Deucalion HPC",
       "properties": {
@@ -76,23 +122,201 @@
           "scope": "resource",
           "description": "Enable or disable Slurm sbatch script checks."
         },
-        "deucalionHpc.disabledRules": {
+        "deucalionHpc.slurm.allowedPartitions": {
           "type": "array",
           "items": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "dev-a100-40",
+              "normal-a100-40",
+              "dev-a100-80",
+              "normal-a100-80",
+              "dev-x86",
+              "normal-x86",
+              "large-x86",
+              "dev-arm",
+              "normal-arm",
+              "large-arm",
+              "ooda"
+            ],
+            "enumDescriptions": [
+              "GPU development partition (A100 40GB, max 4 hours)",
+              "GPU production partition (A100 40GB, max 2 days)",
+              "GPU development partition (A100 80GB, max 4 hours)",
+              "GPU production partition (A100 80GB, max 2 days)",
+              "x86 CPU development partition (max 4 hours)",
+              "x86 CPU standard production partition (max 2 days)",
+              "x86 CPU large partition (max 3 days)",
+              "ARM CPU development partition (max 4 hours)",
+              "ARM CPU standard production partition (max 2 days)",
+              "ARM CPU large partition (max 3 days)",
+              "OODA partition (max 8 hours)"
+            ]
           },
           "default": [],
           "scope": "resource",
-          "description": "List of rule codes to disable (e.g. ['makefile.space-indented-recipe', 'SBATCH_DYNAMIC_VALUE']). Prefix wildcards such as 'makefile.*' are supported."
+          "description": "Allowed Deucalion partitions. When empty, all standard Deucalion partitions are permitted. Click 'Add Item' to select from known partitions."
+        },
+        "deucalionHpc.disabledRules": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "DEUCALION_UNKNOWN_PARTITION",
+              "DEUCALION_TIME_EXCEEDS_PARTITION_LIMIT",
+              "DEUCALION_POLICY_UNVERIFIED",
+              "SBATCH_LATE_DIRECTIVE",
+              "SBATCH_CONFLICTING_MEMORY",
+              "SBATCH_INVALID_TIME",
+              "SBATCH_INVALID_MEMORY",
+              "SBATCH_INVALID_NODES",
+              "SBATCH_INVALID_NTASKS",
+              "SBATCH_INVALID_TASK_DENSITY",
+              "SBATCH_INVALID_CPUS_PER_TASK",
+              "SBATCH_INVALID_CPUS_PER_GPU",
+              "SBATCH_INVALID_ARRAY",
+              "SBATCH_MISSING_VALUE",
+              "SBATCH_UNTERMINATED_QUOTE",
+              "SBATCH_DYNAMIC_VALUE",
+              "makefile.space-indented-recipe",
+              "makefile.missing-separator",
+              "makefile.unterminated-block",
+              "makefile.*",
+              "SBATCH_*"
+            ],
+            "enumDescriptions": [
+              "Unknown partition name not found in the Deucalion partition registry.",
+              "Time request exceeding the maximum limit for the target Deucalion partition.",
+              "Advisory notice for unverified cluster/QoS resource limits.",
+              "#SBATCH directive placed after executable shell line.",
+              "Conflicting memory flags (--mem, --mem-per-cpu, --mem-per-gpu).",
+              "Invalid Slurm time duration format.",
+              "Invalid memory request syntax or invalid suffix.",
+              "Invalid or descending node count ranges.",
+              "Invalid or non-positive task count (-n, --ntasks).",
+              "Invalid or non-positive task density (--ntasks-per-*).",
+              "Invalid or non-positive CPU count per task (-c, --cpus-per-task).",
+              "Invalid or non-positive CPU count per GPU (--cpus-per-gpu).",
+              "Malformed job array index or descending range.",
+              "Known option called without providing a value.",
+              "Unterminated quote in directive line.",
+              "Shell variable or dynamic placeholder used in directive.",
+              "Makefile recipe line indented with spaces instead of a tab.",
+              "Missing separator before Makefile recipe or target definition.",
+              "Unterminated conditional or define block in Makefile.",
+              "Disable all GNU Makefile validation rules.",
+              "Disable all Slurm directive validation rules."
+            ]
+          },
+          "default": [],
+          "scope": "resource",
+          "description": "List of rule codes to disable. Click 'Add Item' to select from known rule codes or wildcard prefixes."
         },
         "deucalionHpc.rules": {
           "type": "object",
-          "additionalProperties": {
-            "type": "boolean"
-          },
           "default": {},
           "scope": "resource",
-          "description": "Map of individual rule codes to their enabled state (e.g. {\"SBATCH_DYNAMIC_VALUE\": false})."
+          "description": "Map of individual rule codes to their enabled state (overrides disabledRules).",
+          "properties": {
+            "DEUCALION_UNKNOWN_PARTITION": {
+              "type": "boolean",
+              "default": true,
+              "description": "Flag unknown Deucalion partition names."
+            },
+            "DEUCALION_TIME_EXCEEDS_PARTITION_LIMIT": {
+              "type": "boolean",
+              "default": true,
+              "description": "Flag time requests that exceed Deucalion partition limits."
+            },
+            "DEUCALION_POLICY_UNVERIFIED": {
+              "type": "boolean",
+              "default": true,
+              "description": "Advisory notice for unverified cluster/QoS boundaries."
+            },
+            "SBATCH_LATE_DIRECTIVE": {
+              "type": "boolean",
+              "default": true,
+              "description": "Flag directives appearing after executable shell code."
+            },
+            "SBATCH_CONFLICTING_MEMORY": {
+              "type": "boolean",
+              "default": true,
+              "description": "Flag conflicting memory flags."
+            },
+            "SBATCH_INVALID_TIME": {
+              "type": "boolean",
+              "default": true,
+              "description": "Flag invalid time format."
+            },
+            "SBATCH_INVALID_MEMORY": {
+              "type": "boolean",
+              "default": true,
+              "description": "Flag invalid memory format or unit."
+            },
+            "SBATCH_INVALID_NODES": {
+              "type": "boolean",
+              "default": true,
+              "description": "Flag invalid or descending node ranges."
+            },
+            "SBATCH_INVALID_NTASKS": {
+              "type": "boolean",
+              "default": true,
+              "description": "Flag non-positive task count."
+            },
+            "SBATCH_INVALID_TASK_DENSITY": {
+              "type": "boolean",
+              "default": true,
+              "description": "Flag non-positive task density."
+            },
+            "SBATCH_INVALID_CPUS_PER_TASK": {
+              "type": "boolean",
+              "default": true,
+              "description": "Flag non-positive cpus-per-task."
+            },
+            "SBATCH_INVALID_CPUS_PER_GPU": {
+              "type": "boolean",
+              "default": true,
+              "description": "Flag non-positive cpus-per-gpu."
+            },
+            "SBATCH_INVALID_ARRAY": {
+              "type": "boolean",
+              "default": true,
+              "description": "Flag malformed array syntax."
+            },
+            "SBATCH_MISSING_VALUE": {
+              "type": "boolean",
+              "default": true,
+              "description": "Flag required options with empty values."
+            },
+            "SBATCH_UNTERMINATED_QUOTE": {
+              "type": "boolean",
+              "default": true,
+              "description": "Flag unterminated quotes in directives."
+            },
+            "SBATCH_DYNAMIC_VALUE": {
+              "type": "boolean",
+              "default": true,
+              "description": "Flag shell variables and dynamic placeholders."
+            },
+            "makefile.space-indented-recipe": {
+              "type": "boolean",
+              "default": true,
+              "description": "Flag space-indented Makefile recipe lines."
+            },
+            "makefile.missing-separator": {
+              "type": "boolean",
+              "default": true,
+              "description": "Flag lines missing Makefile separators."
+            },
+            "makefile.unterminated-block": {
+              "type": "boolean",
+              "default": true,
+              "description": "Flag unterminated Makefile blocks."
+            }
+          },
+          "additionalProperties": {
+            "type": "boolean"
+          }
         }
       }
     }
