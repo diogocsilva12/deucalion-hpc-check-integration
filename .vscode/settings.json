@@ -1,0 +1,8 @@
+{
+  "files.associations": {
+    "*.mk": "makefile",
+    "*.sbatch": "shellscript",
+    "*.slurm": "shellscript"
+  },
+  "typescript.tsdk": "node_modules/typescript/lib"
+}
