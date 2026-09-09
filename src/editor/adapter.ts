@@ -112,6 +112,16 @@ export interface AdapterLimits {
   readonly maxDiagnostics?: number;
 }
 
+export interface FindingEntry {
+  readonly uri: UriLike;
+  readonly diagnostics: readonly DiagnosticLike[];
+}
+
+export interface EditorAdapter extends DisposableLike {
+  getFindings(): ReadonlyMap<string, FindingEntry>;
+  onDidChangeFindings(listener: () => void): DisposableLike;
+}
+
 export const DEFAULT_MAX_DOCUMENT_CHARACTERS = 1_000_000;
 export const DEFAULT_MAX_DIAGNOSTICS = 500;
 
@@ -175,11 +185,41 @@ export function createEditorAdapter(
   api: VscodeLike,
   validators: Validators,
   limits: AdapterLimits = {},
-): DisposableLike {
+): EditorAdapter {
   const collection = api.languages.createDiagnosticCollection('Deucalion HPC');
   const maxDocumentCharacters =
     limits.maxDocumentCharacters ?? DEFAULT_MAX_DOCUMENT_CHARACTERS;
   const maxDiagnostics = limits.maxDiagnostics ?? DEFAULT_MAX_DIAGNOSTICS;
+
+  const findingsMap = new Map<string, FindingEntry>();
+  const findingsListeners = new Set<() => void>();
+
+  const notifyFindings = () => {
+    for (const listener of findingsListeners) {
+      try {
+        listener();
+      } catch {
+        // ignore errors in listeners
+      }
+    }
+  };
+
+  const updateFindings = (uri: UriLike, diagnostics: readonly DiagnosticLike[]) => {
+    if (diagnostics.length === 0) {
+      if (findingsMap.delete(uri.toString())) {
+        notifyFindings();
+      }
+    } else {
+      findingsMap.set(uri.toString(), { uri, diagnostics });
+      notifyFindings();
+    }
+  };
+
+  const removeFindings = (uri: UriLike) => {
+    if (findingsMap.delete(uri.toString())) {
+      notifyFindings();
+    }
+  };
 
   const getDocumentSettings = (document: EditorDocument): DeucalionSettings => {
     const accessor = api.workspace.getConfiguration?.('deucalionHpc', document.uri);
@@ -204,22 +244,26 @@ export function createEditorAdapter(
     const sbatch = isSbatchFile(document) || isShellWithSbatch(document, text);
     if (!makefile && !sbatch) {
       collection.delete(document.uri);
+      removeFindings(document.uri);
       return;
     }
 
     const settings = getDocumentSettings(document);
     if (!isDocumentAllowed(document, settings)) {
       collection.delete(document.uri);
+      removeFindings(document.uri);
       return;
     }
 
     if (makefile && !settings.makefileEnabled) {
       collection.delete(document.uri);
+      removeFindings(document.uri);
       return;
     }
 
     if (sbatch && !settings.slurmEnabled) {
       collection.delete(document.uri);
+      removeFindings(document.uri);
       return;
     }
 
@@ -233,7 +277,9 @@ export function createEditorAdapter(
           end: { line: 0, character: 0 },
         },
       };
-      collection.set(document.uri, [toDiagnostic(api, limitDiagnostic)]);
+      const diag = [toDiagnostic(api, limitDiagnostic)];
+      collection.set(document.uri, diag);
+      updateFindings(document.uri, diag);
       return;
     }
 
@@ -252,7 +298,9 @@ export function createEditorAdapter(
           end: { line: 0, character: 0 },
         },
       };
-      collection.set(document.uri, [toDiagnostic(api, failure)]);
+      const diag = [toDiagnostic(api, failure)];
+      collection.set(document.uri, diag);
+      updateFindings(document.uri, diag);
       return;
     }
 
@@ -275,8 +323,10 @@ export function createEditorAdapter(
     const diagnostics = items.map((item) => toDiagnostic(api, item));
     if (diagnostics.length === 0) {
       collection.delete(document.uri);
+      removeFindings(document.uri);
     } else {
       collection.set(document.uri, diagnostics);
+      updateFindings(document.uri, diagnostics);
     }
   };
 
@@ -285,17 +335,24 @@ export function createEditorAdapter(
     api.workspace.onDidSaveTextDocument(validateDocument),
     api.workspace.onDidChangeTextDocument(({ document }) => {
       collection.delete(document.uri);
+      removeFindings(document.uri);
     }),
     api.workspace.onDidCloseTextDocument((document) => {
       collection.delete(document.uri);
+      removeFindings(document.uri);
     }),
     api.workspace.onDidDeleteFiles(({ files }) => {
-      for (const uri of files) collection.delete(uri);
+      for (const uri of files) {
+        collection.delete(uri);
+        removeFindings(uri);
+      }
     }),
     api.workspace.onDidRenameFiles(({ files }) => {
       for (const { oldUri, newUri } of files) {
         collection.delete(oldUri);
         collection.delete(newUri);
+        removeFindings(oldUri);
+        removeFindings(newUri);
       }
     }),
   ];
@@ -317,7 +374,18 @@ export function createEditorAdapter(
   }
 
   return {
+    getFindings: () => new Map(findingsMap),
+    onDidChangeFindings: (listener: () => void): DisposableLike => {
+      findingsListeners.add(listener);
+      return {
+        dispose: () => {
+          findingsListeners.delete(listener);
+        },
+      };
+    },
     dispose: () => {
+      findingsListeners.clear();
+      findingsMap.clear();
       for (const disposable of disposables.reverse()) disposable.dispose();
       collection.dispose();
     },

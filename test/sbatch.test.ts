@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { parseSlurmTimeToMinutes } from '../src/core/deucalion';
 import { validateSbatch } from '../src/core/sbatch';
 
-test('accepts standard long resource options in the SBATCH header', () => {
+test('accepts standard long resource options in the SBATCH header with valid Deucalion partition', () => {
   const diagnostics = validateSbatch([
     '#!/bin/bash',
+    '#SBATCH --partition=normal-x86',
     '#SBATCH --nodes=2',
     '#SBATCH --ntasks 8',
     '#SBATCH --cpus-per-task=4',
@@ -16,6 +18,82 @@ test('accepts standard long resource options in the SBATCH header', () => {
   ].join('\n'));
 
   assert.deepEqual(diagnostics.filter(({ severity }) => severity === 'error'), []);
+});
+
+test('accepts all 11 valid Deucalion partitions within time limits', () => {
+  const partitions = [
+    { name: 'dev-a100-40', time: '04:00:00' },
+    { name: 'normal-a100-40', time: '2-00:00:00' },
+    { name: 'dev-a100-80', time: '03:59:00' },
+    { name: 'normal-a100-80', time: '48:00:00' },
+    { name: 'dev-x86', time: '240' },
+    { name: 'normal-x86', time: '1-12:00:00' },
+    { name: 'large-x86', time: '3-00:00:00' },
+    { name: 'dev-arm', time: '04:00:00' },
+    { name: 'normal-arm', time: '2-00:00:00' },
+    { name: 'large-arm', time: '72:00:00' },
+    { name: 'ooda', time: '08:00:00' },
+  ];
+
+  for (const p of partitions) {
+    const diagnostics = validateSbatch([
+      `#SBATCH --partition=${p.name}`,
+      `#SBATCH --time=${p.time}`,
+      'true',
+    ].join('\n'));
+
+    const errors = diagnostics.filter(({ severity }) => severity === 'error');
+    assert.deepEqual(errors, [], `Expected no errors for partition ${p.name} with time ${p.time}`);
+  }
+});
+
+test('rejects unknown Deucalion partition name', () => {
+  const diagnostics = validateSbatch([
+    '#SBATCH --partition=nonexistent-gpu',
+    'true',
+  ].join('\n'));
+
+  const errors = diagnostics.filter(({ code }) => code === 'DEUCALION_UNKNOWN_PARTITION');
+  assert.equal(errors.length, 1);
+  assert.match(errors[0]?.message ?? '', /Unknown Deucalion partition 'nonexistent-gpu'/);
+  assert.equal(errors[0]?.sourceUrl, 'https://docs.deucalion.macc.fccn.pt/');
+});
+
+test('rejects unknown partition in comma-separated list', () => {
+  const diagnostics = validateSbatch([
+    '#SBATCH -p dev-x86,invalid-arm,normal-x86',
+    'true',
+  ].join('\n'));
+
+  const errors = diagnostics.filter(({ code }) => code === 'DEUCALION_UNKNOWN_PARTITION');
+  assert.equal(errors.length, 1);
+  assert.match(errors[0]?.message ?? '', /Unknown Deucalion partition 'invalid-arm'/);
+});
+
+test('rejects time request exceeding Deucalion partition time limit', () => {
+  // dev-x86 max time is 4 hours (240 min)
+  const diagnostics = validateSbatch([
+    '#SBATCH --partition=dev-x86',
+    '#SBATCH --time=05:00:00',
+    'true',
+  ].join('\n'));
+
+  const errors = diagnostics.filter(({ code }) => code === 'DEUCALION_TIME_EXCEEDS_PARTITION_LIMIT');
+  assert.equal(errors.length, 1);
+  assert.match(errors[0]?.message ?? '', /Requested time '05:00:00' exceeds the maximum time limit of 04:00:00 for Deucalion partition 'dev-x86'/);
+  assert.equal(errors[0]?.sourceUrl, 'https://docs.deucalion.macc.fccn.pt/');
+});
+
+test('rejects UNLIMITED time request on partition with finite limit', () => {
+  const diagnostics = validateSbatch([
+    '#SBATCH --partition=ooda',
+    '#SBATCH --time=UNLIMITED',
+    'true',
+  ].join('\n'));
+
+  const errors = diagnostics.filter(({ code }) => code === 'DEUCALION_TIME_EXCEEDS_PARTITION_LIMIT');
+  assert.equal(errors.length, 1);
+  assert.match(errors[0]?.message ?? '', /Requested time 'UNLIMITED' exceeds the maximum time limit of 08:00:00 for Deucalion partition 'ooda'/);
 });
 
 test('reports ignored directives after commands but ignores heredoc payload text', () => {
@@ -85,9 +163,9 @@ test('marks dynamic resource values as unverified without definite errors', () =
   assert.equal(diagnostics.filter(({ code }) => code === 'SBATCH_DYNAMIC_VALUE').length, 4);
 });
 
-test('marks Deucalion partition and QoS boundaries as unverified when policy evidence is blocked', () => {
+test('marks Deucalion QoS and unbounded cluster resources as unverified', () => {
   const diagnostics = validateSbatch([
-    '#SBATCH --partition=future-partition',
+    '#SBATCH --partition=dev-x86',
     '#SBATCH --qos=future-qos',
     '#SBATCH --nodes=999999',
     'true',
@@ -95,15 +173,6 @@ test('marks Deucalion partition and QoS boundaries as unverified when policy evi
 
   assert.equal(diagnostics.some(({ severity }) => severity === 'error'), false);
   assert.equal(diagnostics.filter(({ code }) => code === 'DEUCALION_POLICY_UNVERIFIED').length, 1);
-});
-
-test('does not imply that a syntactically valid resource value fits an unknown cluster boundary', () => {
-  const diagnostics = validateSbatch('#SBATCH --nodes=999999\ntrue\n');
-
-  assert.deepEqual(diagnostics.map(({ code, severity }) => ({ code, severity })), [{
-    code: 'DEUCALION_POLICY_UNVERIFIED',
-    severity: 'information',
-  }]);
 });
 
 test('rejects mutually exclusive memory request modes', () => {
@@ -148,7 +217,7 @@ test('accepts short forms, CRLF, ranges, special values, and unknown future opti
     '#SBATCH -N2-8',
     '#SBATCH -n 16',
     '#SBATCH -c=4',
-    '#SBATCH -t UNLIMITED',
+    '#SBATCH -t 01:00:00',
     '#SBATCH --time=0',
     '#SBATCH --time-min=2-03:04:05',
     '#SBATCH --mem=0',
@@ -160,7 +229,6 @@ test('accepts short forms, CRLF, ranges, special values, and unknown future opti
   ].join('\r\n'));
 
   assert.equal(diagnostics.some(({ severity }) => severity === 'error'), false);
-  assert.equal(diagnostics.filter(({ code }) => code === 'DEUCALION_POLICY_UNVERIFIED').length, 1);
 });
 
 test('checks CPU-per-GPU counts', () => {
@@ -181,4 +249,17 @@ test('reports unterminated directive quoting', () => {
     code: 'SBATCH_UNTERMINATED_QUOTE',
     severity: 'error',
   }]);
+});
+
+test('parses various Slurm time formats correctly into minutes', () => {
+  assert.equal(parseSlurmTimeToMinutes('60'), 60);
+  assert.equal(parseSlurmTimeToMinutes('30:00'), 30);
+  assert.equal(parseSlurmTimeToMinutes('30:30'), 30.5);
+  assert.equal(parseSlurmTimeToMinutes('04:00:00'), 240);
+  assert.equal(parseSlurmTimeToMinutes('1-00:00:00'), 1440);
+  assert.equal(parseSlurmTimeToMinutes('2-00:00:00'), 2880);
+  assert.equal(parseSlurmTimeToMinutes('3-00:00:00'), 4320);
+  assert.equal(parseSlurmTimeToMinutes('UNLIMITED'), Infinity);
+  assert.equal(parseSlurmTimeToMinutes('INFINITE'), Infinity);
+  assert.equal(parseSlurmTimeToMinutes(undefined), undefined);
 });
