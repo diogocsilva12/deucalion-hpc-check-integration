@@ -1,0 +1,54 @@
+{
+  "name": "deucalion-hpc-check",
+  "displayName": "Deucalion HPC Check",
+  "description": "Offline diagnostics for Deucalion GNU Make and Slurm files.",
+  "version": "0.1.0",
+  "publisher": "deucalion-hpc",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "main": "./out/src/extension.js",
+  "activationEvents": [
+    "onLanguage:makefile",
+    "onLanguage:shellscript",
+    "onStartupFinished"
+  ],
+  "categories": [
+    "Linters"
+  ],
+  "keywords": [
+    "deucalion",
+    "hpc",
+    "makefile",
+    "slurm",
+    "sbatch"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true,
+      "description": "Validation reads open document text locally and never executes files, starts processes, or accesses the network."
+    },
+    "virtualWorkspaces": {
+      "supported": true
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "tsc -p tsconfig.json",
+    "watch": "tsc -p tsconfig.json --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "npm run typecheck",
+    "test": "npm run build && node --test out/test/*.test.js",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.2",
+    "@types/vscode": "1.96.0",
+    "@vscode/vsce": "3.9.2",
+    "typescript": "5.9.3"
+  }
+}
